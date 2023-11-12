@@ -63,15 +63,15 @@ int main_v2(int argc, char** argv)
     int K[9];
     int* A = new int[N * M];
 
+    auto t1_start = std::chrono::high_resolution_clock::now();
+
     mpi.execute_on(0, [&](MPI_Wrapper* ctx, int id)
         {
             FILE* f = fopen("date.bin", "r");
             fread(K, sizeof(int), 9, f);
             fread(A, sizeof(int), N * M, f);
             fclose(f);
-        });
-
-    auto t_start = std::chrono::high_resolution_clock::now();   
+        });    
 
     mpi.broadcast(0, K, 9);
 
@@ -80,11 +80,13 @@ int main_v2(int argc, char** argv)
 
     int* mat = new int[p_lines_count * M];
 
+    auto t2_start = std::chrono::high_resolution_clock::now();
+
     mpi.scatter_ints(0, A, mat, p_lines_count * M);    
 
     int* prevLine = new int[M];
     int* crtLine = new int[M];
-    int* lastLine = new int[M];
+    int* lastLine = new int[M];    
 
     mpi.execute_on(0, [&](MPI_Wrapper* ctx, int id)
         {
@@ -107,8 +109,7 @@ int main_v2(int argc, char** argv)
             ctx->recv_ints(0, prevLine, M);
             ctx->recv_ints(0, lastLine, M);
         });
-
-
+       
     for (int i = 0; i < p_lines_count; i++)
     {
         memcpy(crtLine, &mat[i * M], M * sizeof(int));
@@ -116,18 +117,19 @@ int main_v2(int argc, char** argv)
         for (int j = 0; j < M; j++)
             mat[i * M + j] = conv(K, prevLine, crtLine, nextLine, j, M);
         memcpy(prevLine, crtLine, M * sizeof(int));
-    }    
+    }           
 
-    mpi.gather_ints(0, A, mat, p_lines_count * M);        
-    
-    auto t_end = std::chrono::high_resolution_clock::now();
-    double elapsed_time_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();    
-
+    mpi.gather_ints(0, A, mat, p_lines_count * M);             
 
     mpi.execute_on(0, [&](MPI_Wrapper* ctx, int id)
         {
-            printf(">>Measured time = %f\n", elapsed_time_ms);
+            auto t2_end = std::chrono::high_resolution_clock::now();
+            double elapsed_t2_ms = std::chrono::duration<double, std::milli>(t2_end - t2_start).count();
+            printf(">>Measured time = %f\n", elapsed_t2_ms); // t2
+        });
 
+    mpi.execute_on(0, [&](MPI_Wrapper* ctx, int id)
+        {            
             ofstream g("result.txt");
             g << N << " " << M << "\n";
             for (int i = 0; i < N; i++)
@@ -137,95 +139,101 @@ int main_v2(int argc, char** argv)
                 g << "\n";
             }
             g.close();
-        });
+
+            auto t1_end = std::chrono::high_resolution_clock::now();
+            double elapsed_t1_ms = std::chrono::duration<double, std::milli>(t1_end - t1_start).count();
+            printf(">>Measured time = %f\n", elapsed_t1_ms); // t1
+        });    
 
     return 0;
 }
 
 int main_v1(int argc, char** argv) 
-{            
+{                
     MPI_Wrapper mpi;   
-    int N = atoi(argv[1]), M = N;
+    int N = atoi(argv[1]), M = N;    
+
+    int chunk_lines_count = N / (mpi.get_procs_count() - 1);
+    
 
     mpi.execute_on(0, [&](MPI_Wrapper* ctx, int id)
         {            
             int K[9];
             int* A = new int[N * M];
-
+            
             measure([&]() 
-                {
-                    FILE* f = fopen("date.bin", "r");
-
-                    fread(K, sizeof(int), 9, f);
-
-                    for (int p = 1; p < ctx->get_procs_count(); p++)
-                        ctx->send_ints(p, K, 9);
-
-                    int chunk_lines_count = N / (ctx->get_procs_count() - 1);
+                {                    
+                    FILE* f = fopen("date.bin", "rb");
+                    
+                    fread(K, sizeof(int), 9, f);                    
+                    ctx->broadcast(0, K, 9);                    
+                    
                     printf("Reading %i lines at a time\n", chunk_lines_count);
 
                     int line_index = 0;
 
                     for (int p = 1; p < ctx->get_procs_count(); p++)
-                    {
-                        ctx->send_int(p, chunk_lines_count); // how many lines to read
-
-                        fread(&A[line_index * M], sizeof(int), chunk_lines_count * M, f);
-
-                        // first line owned by p is the next line in p-1, so send it to the previous thread
-                        if (p > 1)
-                            ctx->send_ints(p - 1, &A[line_index * M], M);
-
-                        // send previous line to p                
-                        ctx->send_ints(p, &A[max(line_index - 1, 0) * M], M);
-
-                        // send its own block to p                
-                        ctx->send_ints(p, &A[line_index * M], chunk_lines_count * M);
-
-                        line_index += chunk_lines_count;
+                    {                                                
+                        fread(A, sizeof(int), chunk_lines_count * M, f);
+                        ctx->send_ints(p, A, chunk_lines_count * M);                                               
                     }
-                    fclose(f);
+                    fclose(f);              
+                    
+                    printf(">>Measured time = %f\n", 0); // t2 ??
 
-                    // send the last line of the matrix as the next line of the last thread
-                    ctx->send_ints(ctx->get_procs_count() - 1, &A[(N - 1) * M], M);
-
-                    int* recvA = A;
+                    ofstream g("result.txt");
+                    g << N << " " << M << "\n";
                     for (int p = 1; p < ctx->get_procs_count(); p++)
                     {
-                        ctx->recv_ints(p, recvA, chunk_lines_count * M);
-                        recvA += chunk_lines_count * M;
-                    }
-                });
+                        ctx->recv_ints(p, A, chunk_lines_count * M);            
 
-            ofstream g("result.txt");
-            g << N << " " << M << "\n";
-            for (int i = 0; i < N; i++)
-            {
-                for (int j = 0; j < M; j++)
-                    g << A[i * M + j] << " ";
-                g << "\n";
-            }
-            g.close();
+                        for (int i = 0; i < chunk_lines_count; i++)
+                        {
+                            for (int j = 0; j < M; j++)
+                                g << A[i * M + j] << " ";
+                            g << "\n";
+                        }
+
+                    }
+                    g.close();
+                });         
             
             delete[] A;                       
-        });
+        });       
 
     mpi.execute_on_others(0, [&](MPI_Wrapper* ctx, int id)
-        {
+        {            
             int K[9];            
-            ctx->recv_ints(0, K, 9);
+            ctx->broadcast(0, K, 9);
 
-            // each thread receives in order: prevLine, no. its own lines, its own submatrix, and lastLine
-
-            int n = ctx->recv_int(0);
+            int n = chunk_lines_count;
 
             int* prevLine = new int[M];
             int* mat = new int[n * M];
-            int* lastLine = new int[M];
+            int* lastLine = new int[M];            
 
-            ctx->recv_ints(0, prevLine, M);
-            ctx->recv_ints(0, mat, n * M);
-            ctx->recv_ints(0, lastLine, M);
+            ctx->recv_ints(0, mat, n * M);                   
+
+            if (id == 1)
+            {
+                memcpy(prevLine, mat, M * sizeof(int));
+                ctx->send_ints(id + 1, &mat[(n - 1) * M], M); // prevLine of id+1
+                ctx->recv_ints(id + 1, lastLine, M);
+            }
+            else if (id == ctx->get_procs_count() - 1)
+            {
+                memcpy(lastLine, &mat[(n - 1) * M], M * sizeof(int));
+                ctx->recv_ints(id - 1, prevLine, M);
+                ctx->send_ints(id - 1, mat, M); // lastLine of id-1                
+            }
+            else
+            {
+                ctx->recv_ints(id - 1, prevLine, M);
+                ctx->send_ints(id - 1, mat, M); // lastLine of id-1
+
+                ctx->send_ints(id + 1, &mat[(n - 1) * M], M); // prevLine of i+1                
+                ctx->recv_ints(id + 1, lastLine, M);
+            }                      
 
             int* crtLine = new int[M];
 
