@@ -77,7 +77,7 @@ public:
         if (x.score < 0)
         {
             removed_parts.insert(x.part_id);
-            printf("___________________Removed %i\n", x.part_id);
+            //printf("___________________Removed %i\n", x.part_id);
             return;
         }
         else
@@ -224,7 +224,7 @@ void producer(PartPipe* pipe, int pr, int pid)
     int q = 50 / pr, r = 50 % pr;
     int start = pid * q + (r <= pid ? r : pid);
     int end = (pid + 1) * q + (r <= (pid + 1) ? r : pid + 1);
-    printf("Started producer %i %i\n", start, end);
+    //printf("Started producer %i %i\n", start, end);
 
     //cout << start << " " << end << "\n";
     for (int k = start; k < end; k++)
@@ -242,14 +242,14 @@ void producer(PartPipe* pipe, int pr, int pid)
         f.close();        
 
     }
-    printf("Producer %i finished.\n", pid);
+    //printf("Producer %i finished.\n", pid);
 }
 
 void consumer(PartPipe* pipe, int pid)
 {
-    printf("Consumer %i started\n", pid);
+    //printf("Consumer %i started\n", pid);
     pipe->run();
-    printf("Consumer %i finished\n", pid);
+    //printf("Consumer %i finished\n", pid);
 }
 
 void parallel(int pr, int pw)
